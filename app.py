@@ -16,9 +16,7 @@ from aiohttp import web
 
 # 环境变量
 UUID = os.environ.get('UUID', '792c9cd6-9ece-4ebc-ff02-86eaf8bf7e73')   # 节点UUID
-NEZHA_SERVER = os.environ.get('NEZHA_SERVER', '')    # 哪吒v0填写格式: nezha.xxx.com  哪吒v1填写格式: nezha.xxx.com:8008
-NEZHA_PORT = os.environ.get('NEZHA_PORT', '')        # 哪吒v1请留空，哪吒v0 agent端口
-NEZHA_KEY = os.environ.get('NEZHA_KEY', '')          # 哪吒v0或v1密钥，哪吒面板后台命令里获取
+
 DOMAIN = os.environ.get('DOMAIN', '158.174.95.195')                # 项目分配的域名或反代后的域名,不包含https://前缀,例如: domain.xxx.com
 SUB_PATH = os.environ.get('SUB_PATH', 'sub')         # 节点订阅token
 NAME = os.environ.get('NAME', '')                    # 节点名称
@@ -28,7 +26,7 @@ PORT = int(os.environ.get('SERVER_PORT') or os.environ.get('PORT') or 10032)  # 
 
 AUTO_ACCESS = os.environ.get('AUTO_ACCESS', '').lower() == 'true' # 自动访问保活,默认关闭,true开启,false关闭,需同时填写DOMAIN变量
 DEBUG = os.environ.get('DEBUG', '').lower() == 'true' # 保持默认,调试使用,true开启调试
-
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 全局变量
 CurrentDomain = DOMAIN
 CurrentPort = 443
@@ -447,7 +445,9 @@ async def http_handler(request):
 
     if request.path == '/':
         try:
-            with open('index.html', 'r', encoding='utf-8') as f:
+            file_path = os.path.join(BASE_DIR, "index.html")
+
+            with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
             return web.Response(text=content, content_type='text/html')
         except:
@@ -485,7 +485,6 @@ def cleanup_files():
 async def main():
     actual_port = PORT
 
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
     app = web.Application()
 
