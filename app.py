@@ -15,15 +15,17 @@ import subprocess
 from aiohttp import web
 
 # 环境变量
-UUID = os.environ.get('UUID', '7bd180e8-1142-4387-93f5-03e8d750a896')   # 节点UUID
+UUID = os.environ.get('UUID', '792c9cd6-9ece-4ebc-ff02-86eaf8bf7e73')   # 节点UUID
 NEZHA_SERVER = os.environ.get('NEZHA_SERVER', '')    # 哪吒v0填写格式: nezha.xxx.com  哪吒v1填写格式: nezha.xxx.com:8008
 NEZHA_PORT = os.environ.get('NEZHA_PORT', '')        # 哪吒v1请留空，哪吒v0 agent端口
 NEZHA_KEY = os.environ.get('NEZHA_KEY', '')          # 哪吒v0或v1密钥，哪吒面板后台命令里获取
-DOMAIN = os.environ.get('DOMAIN', '')                # 项目分配的域名或反代后的域名,不包含https://前缀,例如: domain.xxx.com
+DOMAIN = os.environ.get('DOMAIN', '158.174.95.195')                # 项目分配的域名或反代后的域名,不包含https://前缀,例如: domain.xxx.com
 SUB_PATH = os.environ.get('SUB_PATH', 'sub')         # 节点订阅token
 NAME = os.environ.get('NAME', '')                    # 节点名称
-WSPATH = os.environ.get('WSPATH', UUID[:8])          # 节点路径
-PORT = int(os.environ.get('SERVER_PORT') or os.environ.get('PORT') or 3000)  # http和ws端口，默认自动优先获取容器分配的端口
+WSPATH = os.environ.get('WSPATH', UUID)         # 节点路径
+
+PORT = int(os.environ.get('SERVER_PORT') or os.environ.get('PORT') or 10032)  # http和ws端口，默认自动优先获取容器分配的端口
+
 AUTO_ACCESS = os.environ.get('AUTO_ACCESS', '').lower() == 'true' # 自动访问保活,默认关闭,true开启,false关闭,需同时填写DOMAIN变量
 DEBUG = os.environ.get('DEBUG', '').lower() == 'true' # 保持默认,调试使用,true开启调试
 
@@ -56,20 +58,7 @@ logging.getLogger('aiohttp.websocket').setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
-def is_port_available(port, host='0.0.0.0'):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        try:
-            s.bind((host, port))
-            return True
-        except OSError:
-            return False
-
-def find_available_port(start_port, max_attempts=100):
-    for port in range(start_port, start_port + max_attempts):
-        if is_port_available(port):
-            return port
-    return None
-
+ 
 def is_blocked_domain(host: str) -> bool:
     if not host:
         return False
@@ -77,54 +66,6 @@ def is_blocked_domain(host: str) -> bool:
     return any(host_lower == blocked or host_lower.endswith('.' + blocked) 
               for blocked in BLOCKED_DOMAINS)
 
-async def get_isp():
-    global ISP
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get('https://api.ip.sb/geoip', 
-                                 headers={'User-Agent': 'Mozilla/5.0'},
-                                 timeout=3) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    ISP = f"{data.get('country_code', '')}-{data.get('isp', '')}".replace(' ', '_')
-                    return
-    except:
-        pass
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get('http://ip-api.com/json',
-                                 headers={'User-Agent': 'Mozilla/5.0'},
-                                 timeout=3) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    ISP = f"{data.get('countryCode', '')}-{data.get('org', '')}".replace(' ', '_')
-                    return
-    except:
-        pass
-    
-    ISP = 'Unknown'
-
-async def get_ip():
-    global CurrentDomain, Tls, CurrentPort
-    if not DOMAIN or DOMAIN == 'your-domain.com':
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get('https://api-ipv4.ip.sb/ip', timeout=5) as resp:
-                    if resp.status == 200:
-                        ip = await resp.text()
-                        CurrentDomain = ip.strip()
-                        Tls = 'none'
-                        CurrentPort = PORT
-        except Exception as e:
-            logger.error(f'Failed to get IP: {e}')
-            CurrentDomain = 'change-your-domain.com'
-            Tls = 'tls'
-            CurrentPort = 443
-    else:
-        CurrentDomain = DOMAIN
-        Tls = 'tls'
-        CurrentPort = 443
 
 async def resolve_host(host: str) -> str:
     try:
@@ -462,11 +403,6 @@ async def websocket_handler(request):
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     CUUID = UUID.replace('-', '')
-    path = request.path
-    
-    if f'/{WSPATH}' not in path:
-        await ws.close()
-        return ws
     
     proxy = ProxyHandler(CUUID)
     
@@ -505,6 +441,10 @@ async def websocket_handler(request):
     return ws
 
 async def http_handler(request):
+        # websocket upgrade
+    if request.headers.get('Upgrade', '').lower() == 'websocket':
+        return await websocket_handler(request)
+
     if request.path == '/':
         try:
             with open('index.html', 'r', encoding='utf-8') as f:
@@ -514,8 +454,6 @@ async def http_handler(request):
             return web.Response(text='Hello world!', content_type='text/html')
     
     elif request.path == f'/{SUB_PATH}':
-        await get_isp()
-        await get_ip()
         
         name_part = f"{NAME}-{ISP}" if NAME else ISP
         tls_param = 'tls' if Tls == 'tls' else 'none'
@@ -535,105 +473,6 @@ async def http_handler(request):
     
     return web.Response(status=404, text='Not Found\n')
 
-def get_download_url():
-    import platform
-    arch = platform.machine()
-    
-    if 'arm' in arch.lower() or 'aarch64' in arch.lower():
-        if not NEZHA_PORT:
-            return 'https://arm64.eooce.com/v1'
-        else:
-            return 'https://arm64.eooce.com/agent'
-    else:
-        if not NEZHA_PORT:
-            return 'https://amd64.eooce.com/v1'
-        else:
-            return 'https://amd64.eooce.com/agent'
-
-async def download_file():
-    if not NEZHA_SERVER and not NEZHA_KEY:
-        return
-    
-    try:
-        url = get_download_url()
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as resp:
-                if resp.status == 200:
-                    content = await resp.read()
-                    with open('npm', 'wb') as f:
-                        f.write(content)
-                    os.chmod('npm', 0o755)
-                    logger.info('✅ npm downloaded successfully')
-    except Exception as e:
-        logger.error(f'Download failed: {e}')
-
-async def run_nezha():
-    try:
-        result = subprocess.run(['ps', 'aux'], capture_output=True, text=True)
-        if './npm' in result.stdout and '[n]pm' in result.stdout:
-            logger.info('npm is already running, skip...')
-            return
-    except:
-        pass
-    
-    # 等待文件下载完成
-    await download_file()
-    
-    command = ''
-    tls_ports = ['443', '8443', '2096', '2087', '2083', '2053']
-    if NEZHA_SERVER and NEZHA_PORT and NEZHA_KEY:
-        nezha_tls = '--tls' if NEZHA_PORT in tls_ports else ''
-        command = f'nohup ./npm -s {NEZHA_SERVER}:{NEZHA_PORT} -p {NEZHA_KEY} {nezha_tls} --disable-auto-update --report-delay 4 --skip-conn --skip-procs >/dev/null 2>&1 &'
-    elif NEZHA_SERVER and NEZHA_KEY:
-        if not NEZHA_PORT:
-            port = NEZHA_SERVER.split(':')[-1] if ':' in NEZHA_SERVER else ''
-            nz_tls = 'true' if port in tls_ports else 'false'
-            config = f"""client_secret: {NEZHA_KEY}
-debug: false
-disable_auto_update: true
-disable_command_execute: false
-disable_force_update: true
-disable_nat: false
-disable_send_query: false
-gpu: false
-insecure_tls: true
-ip_report_period: 1800
-report_delay: 4
-server: {NEZHA_SERVER}
-skip_connection_count: true
-skip_procs_count: true
-temperature: false
-tls: {nz_tls}
-use_gitee_to_upgrade: false
-use_ipv6_country_code: false
-uuid: {UUID}"""
-
-            with open('config.yaml', 'w') as f:
-                f.write(config)
-
-        command = f'nohup ./npm -c config.yaml >/dev/null 2>&1 &'
-    else:
-        return
-    
-    try:
-        subprocess.Popen(command, shell=True, executable='/bin/bash')
-        logger.info('✅ nz started successfully')
-    except Exception as e:
-        logger.error(f'Error running nz: {e}')
-
-async def add_access_task():
-    if not AUTO_ACCESS or not DOMAIN:
-        return
-    
-    full_url = f"https://{DOMAIN}/{SUB_PATH}"
-    try:
-        async with aiohttp.ClientSession() as session:
-            await session.post("https://oooo.serv00.net/add-url",
-                             json={"url": full_url},
-                             headers={'Content-Type': 'application/json'})
-        logger.info('Automatic Access Task added successfully')
-    except:
-        pass
 
 def cleanup_files():
     for file in ['npm', 'config.yaml']:
@@ -645,20 +484,18 @@ def cleanup_files():
 
 async def main():
     actual_port = PORT
-    
-    # 检查端口是否可用，如果不可用则查找可用端口
-    if not is_port_available(actual_port):
-        logger.warning(f"Port {actual_port} is already in use, finding available port...")
-        new_port = find_available_port(actual_port + 1)
-        if new_port:
-            actual_port = new_port
-            logger.info(f"Using port {actual_port} instead of {PORT}")
-        else:
-            logger.error("No available ports found")
-            sys.exit(1)
-    
+
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
     app = web.Application()
-    
+
+    # Vue 静态资源目录
+    app.router.add_static(
+        '/assets/',
+        path=os.path.join(BASE_DIR, 'assets'),
+        name='assets'
+    )
+
     # 路由
     app.router.add_get('/', http_handler)
     app.router.add_get(f'/{SUB_PATH}', http_handler)
@@ -669,15 +506,14 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', actual_port)
     await site.start()
-    logger.info(f"✅ server is running on port {actual_port}")
-    asyncio.create_task(run_nezha())
+    logger.info(f" server is running on port {actual_port}")
+ 
     async def delayed_cleanup():
         await asyncio.sleep(180)
         cleanup_files()
     
     asyncio.create_task(delayed_cleanup())
     
-    await add_access_task()
     
     try:
         await asyncio.Future()
