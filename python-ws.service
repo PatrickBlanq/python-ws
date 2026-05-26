@@ -1,0 +1,13 @@
+[Unit]
+Description=
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=root
+ExecStart=/usr/bin/python3  /root/python-ws/app.py
+
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
